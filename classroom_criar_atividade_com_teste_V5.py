@@ -18,22 +18,29 @@ from google.auth.transport.requests import Request
 SCOPES = [
     "https://www.googleapis.com/auth/classroom.courses.readonly",
     "https://www.googleapis.com/auth/classroom.coursework.students",
-    "https://www.googleapis.com/auth/classroom.topics.readonly",  # <-- NOVO
+    "https://www.googleapis.com/auth/classroom.topics.readonly",
     "https://www.googleapis.com/auth/forms.body",
     "https://www.googleapis.com/auth/drive.file",
 ]
-
 
 CREDENTIALS_FILE = "credentials.json"
 TOKEN_FILE = "token.json"
 
 
 def get_credentials():
+    """
+    Carrega o token.json com os SCOPES corretos.
+    Se o token não existir ou os escopos mudaram, refaz a autorização.
+    """
     creds = None
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
 
-    if not creds or not creds.valid:
+    if (
+        not creds
+        or not creds.valid
+        or not set(SCOPES).issubset(set(creds.scopes or []))
+    ):
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
@@ -121,35 +128,11 @@ def escolher_tema(classroom_service, curso) -> Optional[str]:
 
 
 # ------------------------------------------------------------
-# PARSER – FORMATO:
-#
-# P1: Pergunta ...
-# A) alternativa
-# B) alternativa
-# C) alternativa
-# D) alternativa
-# E) alternativa
-# G: B
-#
-# P2: ...
-# ...
+# PARSER – FORMATO
 # ------------------------------------------------------------
 def parse_bloco(bloco: str) -> List[Dict[str, Any]]:
     """
-    Formato esperado:
-
-    P1: Por que a segurança no trabalho é essencial no ambiente industrial?
-    A) ...
-    B) ...
-    C) ...
-    D) ...
-    E) ...
-    G: B
-
-    P2: ...
-    A) ...
-    ...
-    G: C
+    Analisa o bloco de texto para extrair perguntas, alternativas e gabarito.
     """
     texto = bloco.strip("\n")
     if not texto:
@@ -168,6 +151,7 @@ def parse_bloco(bloco: str) -> List[Dict[str, Any]]:
                 bloco_atual.append("")
             continue
 
+        # Início de nova pergunta: P1:, P2:, P:
         if re.match(r"^P\d*:", s, re.IGNORECASE):
             if bloco_atual:
                 blocos.append(bloco_atual)
@@ -198,9 +182,10 @@ def parse_bloco(bloco: str) -> List[Dict[str, Any]]:
 
         alternativas_textos: List[str] = []
         alternativas_letras: List[str] = []
-        letra_correta: str | None = None
+        letra_correta: Optional[str] = None
 
         for l in linhas_p[1:]:
+            # Alternativas: A) ..., B) ..., etc.
             m_alt = re.match(r"([A-Z])\)\s*(.+)", l, re.IGNORECASE)
             if m_alt:
                 letra = m_alt.group(1).lower()
@@ -209,6 +194,7 @@ def parse_bloco(bloco: str) -> List[Dict[str, Any]]:
                 alternativas_textos.append(texto_alt)
                 continue
 
+            # Gabarito: G: B
             m_g = re.match(r"G:\s*([A-Z])", l, re.IGNORECASE)
             if m_g:
                 letra_correta = m_g.group(1).lower()
@@ -247,17 +233,35 @@ def parse_bloco(bloco: str) -> List[Dict[str, Any]]:
 
 
 # ------------------------------------------------------------
-# FORMS – CRIAR QUIZ (coletando e-mail para vincular ao aluno)
+# FORMS – CRIAR QUIZ (coletando e-mail) E LIBERAR ACESSO
 # ------------------------------------------------------------
-def criar_quiz_forms(forms_service, titulo, questoes):
-    # cria o formulário
+def criar_quiz_forms(forms_service, drive_service, titulo, questoes):
+    """
+    Cria um Forms como QUIZ, coletando e-mail do respondente,
+    adiciona as questões com gabarito E DEFINE PERMISSÃO DE ACESSO PÚBLICO.
+    Retorna (form_id, responder_uri).
+    """
     form = forms_service.forms().create(
         body={"info": {"title": titulo}}
     ).execute()
 
     form_id = form["formId"]
+    
+    # === LIBERAR PARA TODOS COM LINK (Drive API) ===
+    try:
+        drive_service.permissions().create(
+            fileId=form_id,
+            body={
+                "type": "anyone",
+                "role": "reader",
+            },
+            fields="id",
+        ).execute()
+        print("Permissão de acesso ao Forms definida para 'Qualquer pessoa com o link'.")
+    except HttpError as e:
+        print(f"ATENÇÃO: Não foi possível definir permissão pública do Drive. Verifique a configuração do seu domínio ou faça manualmente: {e}")
 
-    # transformar em quiz e coletar e-mail do respondente
+
     requests = [
         {
             "updateSettings": {
@@ -270,7 +274,6 @@ def criar_quiz_forms(forms_service, titulo, questoes):
         }
     ]
 
-    # adicionar questões
     for i, q in enumerate(questoes):
         alternativas = q["alternativas"]
         correta = alternativas[q["correta_idx"]]
@@ -314,14 +317,31 @@ def criar_quiz_forms(forms_service, titulo, questoes):
 
 
 # ------------------------------------------------------------
-# CLASSROOM – CRIAR ATIVIDADE COM LINK DO FORMS
+# CLASSROOM – CRIAR ATIVIDADE COM LINK DO FORMS (REVERTIDO)
 # ------------------------------------------------------------
-def criar_atividade_classroom(classroom_service, curso, titulo, link, topic_id: Optional[str]):
+def criar_atividade_classroom(
+    classroom_service,
+    curso,
+    titulo,
+    link: str, # Revertido para link
+    topic_id: Optional[str],
+):
+    """
+    Cria a tarefa no Classroom com o formulário como LINK.
+    Isso ativa a sincronização manual por e-mail no script de sincronização.
+    """
     body = {
         "title": titulo,
         "description": "Avaliação criada automaticamente.",
-        "materials": [{"link": {"url": link, "title": titulo}}],
-        "workType": "ASSIGNMENT",
+        "materials": [
+            {
+                "link": { # REVERTIDO: Usamos 'link' em vez de 'form'
+                    "url": link,
+                    "title": titulo,
+                }
+            }
+        ],
+        "workType": "ASSIGNMENT", # REVERTIDO: Usamos 'ASSIGNMENT'
         "state": "PUBLISHED",
         "maxPoints": 10,
     }
@@ -336,6 +356,7 @@ def criar_atividade_classroom(classroom_service, curso, titulo, link, topic_id: 
         .execute()
     )
     print(f"Tarefa criada no Classroom (ID: {trabalho['id']}).")
+    return trabalho["id"]
 
 
 # ------------------------------------------------------------
@@ -348,6 +369,7 @@ def main():
 
     classroom_service = build("classroom", "v1", credentials=creds)
     forms_service = build("forms", "v1", credentials=creds)
+    drive_service = build("drive", "v3", credentials=creds) 
 
     turma = escolher_turma(classroom_service)
     topic_id = escolher_tema(classroom_service, turma)
@@ -361,7 +383,7 @@ def main():
     print("C) ...")
     print("D) ...")
     print("E) ...")
-    print("G: B   (gabarito da questão)")
+    print("G: B   (gabarito da questão)")
     print("P2: ...")
     print("...")
     print("\nQuando terminar de colar, digite UMA LINHA SÓ com: fim")
@@ -381,11 +403,18 @@ def main():
 
     questoes = parse_bloco(bloco)
 
-    form_id, link = criar_quiz_forms(forms_service, titulo, questoes)
-    criar_atividade_classroom(classroom_service, turma, titulo, link, topic_id)
+    # 1. Cria o Form e libera o acesso (form_id e link são retornados)
+    form_id, link = criar_quiz_forms(forms_service, drive_service, titulo, questoes) 
+    
+    # 2. Cria a atividade no Classroom com o link
+    coursework_id = criar_atividade_classroom(
+        classroom_service, turma, titulo, link, topic_id # REVERTIDO: Passando link
+    )
 
     print("\nProcesso concluído.")
-    print("Link da avaliação:", link)
+    print("Link da avaliação (para fins de verificação):", link)
+    print("ID do Form:", form_id)
+    print("ID do trabalho no Classroom (courseWorkId):", coursework_id)
 
 
 if __name__ == "__main__":
