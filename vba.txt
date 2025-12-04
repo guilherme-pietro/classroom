@@ -1,0 +1,153 @@
+Option Explicit' Constante da cor Azul Salvioli (RGB: 0, 51, 102)Const SALVIOLI_R As Long = 0Const SALVIOLI_G As Long = 51Const SALVIOLI_B As Long = 102'======================================'  MACRO PRINCIPAL – versão 100% compatível'======================================Sub ReformatarTituloEBullets()Dim pres As PresentationDim sldModelo As SlideDim sld As SlideDim shpTituloModelo As ShapeDim shpBodyModelo As ShapeSet pres = ActivePresentation
+If pres.Slides.Count = 0 Then Exit Sub
+
+' O Slide 1 (modelo) DEVE ter o layout desejado
+Set sldModelo = pres.Slides(1)
+
+'---- TÍTULO DO MODELO (Placeholder 0) ----
+On Error Resume Next
+' Usando o Placeholder de Título (Tipo=1) para garantir compatibilidade
+Set shpTituloModelo = sldModelo.Shapes.Title 
+On Error GoTo 0
+
+If shpTituloModelo Is Nothing Then
+    MsgBox "O Slide 1 (modelo) não contém um Placeholder de Título.", vbExclamation
+    Exit Sub
+End If
+
+'---- BODY DO MODELO (Placeholder 1) ----
+Set shpBodyModelo = EncontrarPlaceholderBody(sldModelo, shpTituloModelo)
+If shpBodyModelo Is Nothing Then
+    MsgBox "O Slide 1 (modelo) não possui area de bullets (Placeholder Body).", vbExclamation
+    Exit Sub
+End If
+
+' REPOSICIONA O MODELO PARA MAXIMIZAR O ESPAÇO, JÁ QUE A FAIXA AZUL FOI REMOVIDA
+' (Isto é feito no Python 6.0 no primeiro slide, mas garantimos aqui)
+' Topo: 0.5in, Altura: 1.0in, Body começa em 1.7in.
+
+' Ajustar o Título Modelo
+With shpTituloModelo
+    .Left = pres.SlideWidth * 0.015 ' ~0.5in
+    .Top = pres.SlideHeight * 0.026 ' ~0.5in
+    .Width = pres.SlideWidth * 0.97 ' ~26cm
+    .Height = pres.SlideHeight * 0.052 ' ~1.0in
+End With
+
+' Ajustar o Body Modelo
+With shpBodyModelo
+    .Left = shpTituloModelo.Left
+    .Top = shpTituloModelo.Top + shpTituloModelo.Height + pres.SlideHeight * 0.01 ' Margem de ~0.2in
+    .Width = shpTituloModelo.Width
+    ' A altura será ajustada dinamicamente pelo loop de ajuste de fonte
+    .Height = pres.SlideHeight * 0.75 ' Altura inicial máxima segura
+End With
+
+
+'==========================================
+'  APLICAR A TODOS OS SLIDES
+'==========================================
+For Each sld In pres.Slides
+    
+    ' Se o slide não for o modelo (Slide 1)
+    If sld.SlideIndex > 1 Then
+        
+        '-----------------------------
+        ' TÍTULO
+        '-----------------------------
+        Dim shpTitulo As Shape
+        Set shpTitulo = Nothing
+        On Error Resume Next
+        Set shpTitulo = sld.Shapes.Title
+        On Error GoTo 0
+
+        If Not shpTitulo Is Nothing Then
+            CopiarPos shpTituloModelo, shpTitulo
+            AjustarTitulo shpTitulo
+        End If
+
+        '-----------------------------
+        ' BULLETS
+        '-----------------------------
+        Dim shpBody As Shape
+        Set shpBody = EncontrarPlaceholderBody(sld, shpTitulo)
+
+        If Not shpBody Is Nothing Then
+            CopiarPos shpBodyModelo, shpBody
+            FormatarBullets shpBody
+            AjustarFonteAteCaber shpBody, 14
+        End If
+    
+    ' Se for o slide modelo (Slide 1), apenas aplica a formatação
+    ElseIf sld.SlideIndex = 1 Then
+        AjustarTitulo shpTituloModelo
+        FormatarBullets shpBodyModelo
+        AjustarFonteAteCaber shpBodyModelo, 14
+    End If
+
+Next sld
+
+MsgBox "Slides formatados com sucesso!", vbInformation
+End Sub'======================================'  LOCALIZAR O PLACEHOLDER DE TEXTO'======================================Function EncontrarPlaceholderBody(sld As Slide, shpTitulo As Shape) As ShapeDim shp As ShapeFor Each shp In sld.Shapes
+    If shp.Type = msoPlaceholder Then
+        ' pular o título
+        If Not shpTitulo Is Nothing Then
+            If shp.Id = shpTitulo.Id Then GoTo Prox
+        End If
+        
+        ' aceitar o primeiro placeholder de texto (BODY ou CONTENT)
+        If shp.HasTextFrame Then
+            Set EncontrarPlaceholderBody = shp
+            Exit Function
+        End If
+    End If
+Prox:Next shpEnd Function'======================================'  COPIAR POSIÇÃO/TAMANHO'======================================Sub CopiarPos(shpOrig As Shape, shpDst As Shape)shpDst.Left = shpOrig.LeftshpDst.Top = shpOrig.TopshpDst.Width = shpOrig.WidthshpDst.Height = shpOrig.HeightEnd Sub'======================================'  AJUSTAR TÍTULO (FORMATAÇÃO SALVIOLI)'======================================Sub AjustarTitulo(shp As Shape)If shp.HasTextFrame ThenWith shp.TextFrame2.AutoSize = msoAutoSizeTextToFitShape ' Ajusta texto à forma.MarginLeft = 5.MarginRight = 5.MarginTop = 2.MarginBottom = 2.TextRange.ParagraphFormat.Alignment = msoAlignLeft ' Ajusta alinhamento        ' Aplica a cor do tema (Azul Salvioli)
+        .TextRange.Font.Fill.ForeColor.RGB = RGB(SALVIOLI_R, SALVIOLI_G, SALVIOLI_B)
+        .TextRange.Font.Bold = msoTrue
+        .TextRange.Font.Name = "Arial"
+    End With
+End If
+End Sub'======================================'  FORMATA BULLETS (FORMATAÇÃO SALVIOLI)'======================================Sub FormatarBullets(shp As Shape)Dim tr As TextRange2Dim p As TextRange2If shp.HasTextFrame = msoFalse Then Exit Sub
+If shp.TextFrame2.HasText = msoFalse Then Exit Sub
+
+Set tr = shp.TextFrame2.TextRange
+
+' Reduz margem para maximizar espaço lateral
+shp.TextFrame2.MarginLeft = 5
+shp.TextFrame2.MarginRight = 5
+
+For Each p In tr.Paragraphs
+    ' Garante que o texto seja Arial
+    p.Font.Name = "Arial" 
+    
+    ' Aplica bullet padrão (Unnumbered)
+    With p.ParagraphFormat.Bullet
+        .Visible = msoTrue
+        .Type = msoBulletUnnumbered
+    End With
+Next p
+End Sub'======================================'  DIMINUI FONTE ATÉ CABER NA CAIXA'  (Resolve o problema de estouro vertical)'======================================Sub AjustarFonteAteCaber(shp As Shape, Optional minFontSize As Single = 12)Dim tr As TextRange2Dim f As Single, i As LongIf shp.HasTextFrame = msoFalse Then Exit Sub
+If shp.TextFrame2.HasText = msoFalse Then Exit Sub
+
+Set tr = shp.TextFrame2.TextRange
+f = tr.Font.Size
+
+' Define fonte inicial se for 0 ou muito pequena (Python usa 20pt/22pt)
+If f <= 10 Then f = 20
+
+' Define o AutoSize como NENHUM para que o VBA possa controlar o redimensionamento
+shp.TextFrame2.AutoSize = msoAutoSizeNone
+
+For i = 1 To 50
+    ' Se a altura do texto for menor ou igual à altura do placeholder, sai
+    If tr.BoundHeight <= shp.Height Then Exit Sub
+    ' Se atingiu o tamanho mínimo, sai
+    If f <= minFontSize Then Exit Sub
+    
+    ' Diminui o tamanho da fonte em 1 ponto
+    f = f - 1
+    tr.Font.Size = f
+    ' O DoEvents libera o processamento e permite que o BoundHeight seja atualizado
+    DoEvents 
+Next i
+End Sub

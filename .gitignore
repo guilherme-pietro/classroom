@@ -1,0 +1,43 @@
+# Python cache/build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+site-packages/
+
+# Tools/IDE
+.mypy_cache/
+.pytest_cache/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.idea/
+.vscode/
+
+# OS/misc
+.DS_Store
+*.log
+.env
+
+# Project-specific
+lixo/
+conn.py
+bkp_conn.py
+
+credentials.json
+token.json
+MODULOS
+gerados_pptx
+/lixo/*.json
